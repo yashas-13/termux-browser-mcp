@@ -10,137 +10,31 @@ const { z } = require("zod");
 const { exec } = require("child_process");
 const { promisify } = require("util");
 
-const execPromise = promisify(exec);
+const TurndownService = require("turndown");
+const { parse } = require("node-html-parser");
 
-/**
- * Robust execution wrapper
- */
-async function safeExec(cmd) {
-  try {
-    const { stdout, stderr } = await execPromise(cmd);
-    if (stderr && stderr.trim()) {
-      console.error(`Termux browser command stderr: ${stderr}`);
-    }
-    return stdout;
-  } catch (error) {
-    throw new McpError(
-      ErrorCode.InternalError,
-      `Termux command failed: ${error.message}`
-    );
-  }
-}
+const turndownService = new TurndownService();
 
-const server = new Server(
-  {
-    name: "termux-browser",
-    version: "1.1.0",
-  },
-  {
-    capabilities: {
-      tools: {},
-    },
-  }
-);
+// ... existing code ...
 
 const TOOLS = [
+  // ... existing tools ...
   {
-    name: "open_url",
-    description: "Open a URL in the default Android browser.",
+    name: "visual_snapshot",
+    description: "Take a 'textual snapshot' of a URL (Markdown conversion) for agentic reasoning.",
     schema: z.object({
-      url: z.string().url().describe("The URL to open"),
+      url: z.string().url().describe("The URL to snap"),
     }),
     handler: async (args) => {
-      await safeExec(`termux-open-url "${args.url}"`);
+      const html = await safeExec(`curl -L -A "Mozilla/5.0 (Android 12; Mobile; rv:94.0) Gecko/94.0 Firefox/94.0" "${args.url}"`);
+      const root = parse(html);
+
+      // Remove noise
+      root.querySelectorAll("script, style, iframe, nav, footer").forEach(el => el.remove());
+
+      const markdown = turndownService.turndown(root.toString());
       return {
-        content: [{ type: "text", text: `Opened URL: ${args.url}` }],
-      };
-    },
-  },
-  {
-    name: "search",
-    description: "Perform a Google search in the default browser.",
-    schema: z.object({
-      query: z.string().describe("The search query"),
-    }),
-    handler: async (args) => {
-      const url = `https://www.google.com/search?q=${encodeURIComponent(args.query)}`;
-      await safeExec(`termux-open-url "${url}"`);
-      return {
-        content: [{ type: "text", text: `Searching for: ${args.query}` }],
-      };
-    },
-  },
-  {
-    name: "get_page_source",
-    description: "Fetch the HTML source of a URL (background).",
-    schema: z.object({
-      url: z.string().url().describe("The URL to fetch"),
-    }),
-    handler: async (args) => {
-      // Use curl to get source without opening browser
-      const stdout = await safeExec(`curl -L -A "Mozilla/5.0 (Android 12; Mobile; rv:94.0) Gecko/94.0 Firefox/94.0" "${args.url}"`);
-      return {
-        content: [{ type: "text", text: stdout.substring(0, 50000) }], // Limit to 50k chars
-      };
-    },
-  },
-  {
-    name: "submit_form",
-    description: "Submit an HTML form using POST (automated).",
-    schema: z.object({
-      url: z.string().url().describe("The form action URL"),
-      fields: z.record(z.string()).describe("Key-value pairs of form fields"),
-    }),
-    handler: async (args) => {
-      const data = Object.entries(args.fields)
-        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-        .join("&");
-      const stdout = await safeExec(`curl -X POST -d "${data}" -L "${args.url}"`);
-      return {
-        content: [{ type: "text", text: `Form submitted to ${args.url}. Response preview: ${stdout.substring(0, 1000)}` }],
-      };
-    },
-  },
-  {
-    name: "extract_links",
-    description: "Extract all links from a webpage (automated).",
-    schema: z.object({
-      url: z.string().url().describe("The URL to analyze"),
-    }),
-    handler: async (args) => {
-      const stdout = await safeExec(`curl -sL "${args.url}" | grep -oE 'href="https?://[^"]+"' | cut -d'"' -f2 | sort -u`);
-      return {
-        content: [{ type: "text", text: stdout || "No links found." }],
-      };
-    },
-  },
-  {
-    name: "automate_task",
-    description: "Perform a sequence of browser-like background tasks (monotonous jobs).",
-    schema: z.object({
-      tasks: z.array(z.object({
-        type: z.enum(["get", "post"]),
-        url: z.string().url(),
-        data: z.record(z.string()).optional(),
-      })).describe("List of sequential HTTP tasks"),
-    }),
-    handler: async (args) => {
-      let results = "";
-      for (const task of args.tasks) {
-        let cmd = "";
-        if (task.type === "get") {
-          cmd = `curl -sL "${task.url}"`;
-        } else {
-          const data = Object.entries(task.data || {})
-            .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-            .join("&");
-          cmd = `curl -s -X POST -d "${data}" -L "${task.url}"`;
-        }
-        const res = await safeExec(cmd);
-        results += `Task ${task.type} ${task.url}: ${res.substring(0, 200)}...\n\n`;
-      }
-      return {
-        content: [{ type: "text", text: results }],
+        content: [{ type: "text", text: markdown.substring(0, 30000) }], // Limit to 30k chars
       };
     },
   },

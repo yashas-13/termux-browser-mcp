@@ -12,6 +12,8 @@
   "type": "commonjs",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "node-html-parser": "^7.1.0",
+    "turndown": "^7.2.4",
     "zod": "^4.4.2"
   }
 }
