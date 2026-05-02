@@ -85,24 +85,65 @@ const TOOLS = [
     },
   },
   {
-    name: "browse_and_speak",
-    description: "Open a URL and read a summary of the page using TTS.",
+    name: "submit_form",
+    description: "Submit an HTML form using POST (automated).",
     schema: z.object({
-      url: z.string().url().describe("The URL to browse"),
+      url: z.string().url().describe("The form action URL"),
+      fields: z.record(z.string()).describe("Key-value pairs of form fields"),
     }),
     handler: async (args) => {
-      await safeExec(`termux-open-url "${args.url}"`);
-      // Fetch source to get title or meta description for TTS
-      const source = await safeExec(`curl -sL "${args.url}" | head -n 100`);
-      const titleMatch = source.match(/<title>(.*?)<\/title>/i);
-      const title = titleMatch ? titleMatch[1] : "the page";
-      const text = `Opening ${title} in your browser.`;
-      await safeExec(`termux-tts-speak "${text}"`);
+      const data = Object.entries(args.fields)
+        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+        .join("&");
+      const stdout = await safeExec(`curl -X POST -d "${data}" -L "${args.url}"`);
       return {
-        content: [{ type: "text", text: text }],
+        content: [{ type: "text", text: `Form submitted to ${args.url}. Response preview: ${stdout.substring(0, 1000)}` }],
       };
-    }
-  }
+    },
+  },
+  {
+    name: "extract_links",
+    description: "Extract all links from a webpage (automated).",
+    schema: z.object({
+      url: z.string().url().describe("The URL to analyze"),
+    }),
+    handler: async (args) => {
+      const stdout = await safeExec(`curl -sL "${args.url}" | grep -oE 'href="https?://[^"]+"' | cut -d'"' -f2 | sort -u`);
+      return {
+        content: [{ type: "text", text: stdout || "No links found." }],
+      };
+    },
+  },
+  {
+    name: "automate_task",
+    description: "Perform a sequence of browser-like background tasks (monotonous jobs).",
+    schema: z.object({
+      tasks: z.array(z.object({
+        type: z.enum(["get", "post"]),
+        url: z.string().url(),
+        data: z.record(z.string()).optional(),
+      })).describe("List of sequential HTTP tasks"),
+    }),
+    handler: async (args) => {
+      let results = "";
+      for (const task of args.tasks) {
+        let cmd = "";
+        if (task.type === "get") {
+          cmd = `curl -sL "${task.url}"`;
+        } else {
+          const data = Object.entries(task.data || {})
+            .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+            .join("&");
+          cmd = `curl -s -X POST -d "${data}" -L "${task.url}"`;
+        }
+        const res = await safeExec(cmd);
+        results += `Task ${task.type} ${task.url}: ${res.substring(0, 200)}...\n\n`;
+      }
+      return {
+        content: [{ type: "text", text: results }],
+      };
+    },
+  },
 ];
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
